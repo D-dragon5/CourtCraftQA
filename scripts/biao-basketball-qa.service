@@ -1,0 +1,14 @@
+[Unit]
+Description=Basketball QA viewer
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/CourtCraftQA
+ExecStart=/usr/bin/python3 %h/CourtCraftQA/token_viewer.py --config %h/CourtCraftQA/config.json
+Environment=PYTHONUNBUFFERED=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

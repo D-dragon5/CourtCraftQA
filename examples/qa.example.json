@@ -1,0 +1,56 @@
+{
+  "example_note": "虚构格式示例。请准备同目录的视频、图片和人物事件表；这份文件不包含真实比赛标注。",
+  "prediction": [
+    {
+      "type": "action",
+      "cutoff_seconds": 2.0,
+      "image": "action_boxes.jpg",
+      "qa": [
+        {
+          "question": "持球人下一步首先如何处理球？\nA. 传给内侧接应的队友\nB. 直接远投三分\nC. 沿底线突破\nD. 回传后场",
+          "answer": "A. 传给内侧接应的队友"
+        },
+        {
+          "question": "图中哪些位置关系支持你的判断？",
+          "answer": "Demo Guard 面向内侧，Demo Center 在罚球线附近提供接应。请结合实际画面核对。"
+        }
+      ]
+    },
+    {
+      "type": "tactic",
+      "cutoff_seconds": 4.0,
+      "image": "tactic_boxes.jpg",
+      "qa": [
+        {
+          "question": "两名队员可能如何衔接配合？",
+          "answer": "内侧接应后可继续交球，外线队员保持间距。具体动作需要观看视频判断。"
+        }
+      ]
+    },
+    {
+      "type": "outcome",
+      "cutoff_seconds": 6.0,
+      "image": "outcome_boxes.jpg",
+      "qa": [
+        {
+          "question": "本次进攻的结果是什么？",
+          "answer": "本示例没有真实视频结果，请依据对应回合填写。"
+        }
+      ]
+    }
+  ],
+  "review": [
+    {
+      "question": "请复盘这次进攻的配合与结果。",
+      "answer": "先检查传球和接应，再结合防守变化及最后出手核对进攻过程。"
+    },
+    {
+      "question": "请复盘防守方的应对。",
+      "answer": "检查持球防守、协防位置和出手后的篮板保护。"
+    },
+    {
+      "question": "失败的一方可以如何调整？",
+      "answer": "围绕本回合实际暴露的问题提出调整，并说明预期收益和风险。"
+    }
+  ]
+}

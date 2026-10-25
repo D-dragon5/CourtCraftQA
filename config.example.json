@@ -1,0 +1,8 @@
+{
+  "data_root": "data/C251-C300",
+  "host": "127.0.0.1",
+  "port": 5012,
+  "ffmpeg": "",
+  "cache_dir": "cache",
+  "backups_dir": "backups"
+}

@@ -1,0 +1,8 @@
+{
+  "ssh_target": "your-user@your-server",
+  "ssh_port": 22,
+  "identity_file": "",
+  "local_port": 15014,
+  "remote_port": 5014,
+  "service_name": "biao-basketball-qa.service"
+}
