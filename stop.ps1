@@ -5,6 +5,7 @@ if (-not [IO.Path]::IsPathRooted($ConfigPath)) { $ConfigPath = Join-Path $PSScri
 if (-not (Test-Path -LiteralPath $ConfigPath)) { throw '找不到配置文件。' }
 $settings = Get-Content -LiteralPath $ConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $port = if ($env:COURTCRAFT_PORT) { [int]$env:COURTCRAFT_PORT } elseif ($settings.port) { [int]$settings.port } else { 5012 }
+if ($port -lt 1 -or $port -gt 65535) { throw '端口必须在 1 到 65535 之间。' }
 $listener = Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue
 if (-not $listener) { Write-Output '该配置对应的服务已经关闭。'; exit 0 }
 $running = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $listener[0].OwningProcess)

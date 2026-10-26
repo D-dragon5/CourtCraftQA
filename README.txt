@@ -1,6 +1,6 @@
 CourtCraftQA 篮球问答人工核对工具
 
-仓库：https://github.com/D-dragon5/CourtCraftQA（私有仓库，需访问权限）
+仓库：https://github.com/D-dragon5/CourtCraftQA
 项目说明：README.md
 完整使用教程：docs/user-guide.md
 现场演示顺序：docs/demo-guide.md
@@ -8,9 +8,10 @@ CourtCraftQA 篮球问答人工核对工具
 
 日常使用：
 1. 完整Windows便携包已内置Python和视频转换程序，无须另装环境；源码版需自行准备Python 3.10或以上版本。
-2. 将文件全部解压，双击 start.bat，首次自动生成空目录配置。
+2. 将文件全部解压，可先双击 install-shortcuts.bat 创建桌面入口，再双击 start.bat 启动。
 3. 在网页侧栏顶部输入实际数据目录并点击读取；默认端口5012。
-4. 使用结束双击 stop.bat。最简教程见 docs/quick-start.md。
+4. status.bat 查看运行状态；使用结束双击 stop.bat。最简教程见 docs/quick-start.md。
+5. Tab 编辑第一个答案，Shift 编辑第二个答案；同键再按退出，Shift 加原快捷键执行切题或播放。
 
 演示使用：
 python scripts/prepare_demo.py "D:\basketball-data\C251"

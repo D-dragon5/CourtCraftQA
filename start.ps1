@@ -1,4 +1,4 @@
-﻿param([string]$ConfigPath)
+﻿param([string]$ConfigPath, [switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 $projectDir = $PSScriptRoot
 $firstRunConfig = -not $ConfigPath
@@ -30,8 +30,10 @@ if ($listener) {
 }
 $ready = $false
 for ($attempt=0; $attempt -lt 30; $attempt++) {
-    try { Invoke-RestMethod "http://127.0.0.1:$port/api/health" -TimeoutSec 2 | Out-Null; $ready=$true; break }
+    try { $health = Invoke-RestMethod "http://127.0.0.1:$port/api/health" -TimeoutSec 2; if ($health.status -eq 'ok') { $ready=$true; break } }
     catch { Start-Sleep -Milliseconds 200 }
 }
 if (-not $ready) { throw '网页未正常启动，请查看 logs 文件夹中的错误日志。' }
-Start-Process "http://127.0.0.1:$port"
+Write-Output ("CourtCraftQA 正在运行：http://127.0.0.1:$port")
+Write-Output '查看运行状态请双击 status.bat；结束使用请双击 stop.bat。'
+if (-not $NoBrowser) { Start-Process "http://127.0.0.1:$port" }

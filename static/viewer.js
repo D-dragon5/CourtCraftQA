@@ -13,6 +13,26 @@ function editMessage(message,kind=''){
   $('editStatus').title=message
 }
 
+function updateFullscreenButton(){
+  const full=!!document.fullscreenElement,button=$('toggleFullscreen');
+  button.textContent=full?'退出全屏（Esc）':'全屏（F11）';
+  button.setAttribute('aria-pressed',String(full));
+  button.title=full?'退出整个页面的全屏（Esc）':'全屏显示整个核对页面，Esc 退出；F11 为浏览器自带全屏'
+}
+$('toggleFullscreen').onclick=async()=>{
+  try{
+    if(document.fullscreenElement)await document.exitFullscreen();
+    else if(document.documentElement.requestFullscreen)await document.documentElement.requestFullscreen({navigationUI:'hide'});
+    else editMessage('当前浏览器不支持页面全屏，可使用浏览器的 F11。','error')
+  }catch{
+    editMessage('当前浏览器未允许页面全屏，可在独立浏览器中打开并使用 F11。','error')
+  }
+};
+document.addEventListener('fullscreenchange',()=>{
+  updateFullscreenButton();applyPanelLayout();scheduleCompactReview()
+});
+updateFullscreenButton();
+
 function showPath(){
   $('jsonPath').textContent=doc?`读取：${doc.path}　→　保存：${doc.save_path}（原始文件保留）`:'选择回合后加载 JSON。'
 }
@@ -305,9 +325,39 @@ function primitiveField(value,path,container){
   container.append(label)
 }
 
+function imageTimeFor(name,data,preferredIndex){
+  const filename=value=>String(value||'').replace(/\\/g,'/').split('/').at(-1).toLowerCase();
+  const image=filename(name),stages=Array.isArray(data?.prediction)?data.prediction:[];
+  let matches=stages.filter(stage=>stage?.image&&filename(stage.image)===image);
+  if(!matches.length){
+    const type={action_boxes:'action',tactic_boxes:'tactic',outcome_boxes:'outcome'}[image.replace(/\.[^.]+$/,'')];
+    if(type)matches=stages.filter(stage=>!stage?.image&&stage?.type===type);
+  }
+  const format=stage=>{
+    if(typeof stage.cutoff_timestamp==='string'&&stage.cutoff_timestamp.trim())return stage.cutoff_timestamp.trim();
+    if(typeof stage.cutoff_seconds!=='number'||!Number.isFinite(stage.cutoff_seconds)||stage.cutoff_seconds<0)return null;
+    const total=Math.round(stage.cutoff_seconds*1000),pad=(value,width=2)=>String(value).padStart(width,'0');
+    return `${pad(Math.floor(total/3600000))}:${pad(Math.floor(total/60000)%60)}:${pad(Math.floor(total/1000)%60)}.${pad(total%1000,3)}`;
+  };
+  const current=stages[preferredIndex];
+  if(matches.includes(current))return format(current);
+  const times=[...new Set(matches.map(format).filter(Boolean))];
+  return times.length===1?times[0]:null;
+}
+
+function updateImageTime(){
+  const name=$('images').dataset.name||'',time=imageTimeFor(name,model,sectionIndex);
+  $('imageTime').hidden=!name;
+  $('imageTime').textContent=time?'时间 '+time:'时间未提供';
+  $('imageTime').title='当前标注图在 JSON 中对应的时间';
+  return time;
+}
+
 function showImage(name){
   $('images').replaceChildren();
   const item=attachments.images.find(x=>x.name===name)||attachments.images[0];
+  $('images').dataset.name=item?.name||'';
+  updateImageTime();
   if(!item){
     $('images').textContent='此回合没有图片。';
     return
@@ -318,7 +368,8 @@ function showImage(name){
   a.onclick=e=>{
     e.preventDefault();
     $('previewImage').src=a.href;
-    $('imageTitle').textContent=item.name;
+    const time=updateImageTime();
+    $('imageTitle').textContent=item.name+(time?' · 时间 '+time:' · 时间未提供');
     $('imageDialog').showModal()
   };
   img.src=a.href;
@@ -809,7 +860,7 @@ function diffText(before, after) {
 
 if (typeof module !== 'undefined' && module.exports) module.exports = {diffText};
 
-let answerEditing=false,shiftTapArmed=false,swallowedSpace=false;
+let answerEditing=false,shiftTapArmed=false,swallowedSpace=false,activeAnswerId='answer',pairedQuestionEditing=false;
 const heldShiftKeys=new Set();
 
 let sourceModel=null,sourcePinned=false,sourceTimer,referenceData=null,referenceError='',referenceTicket=0,questionEditing=false;
@@ -826,6 +877,25 @@ function sections(){
 
 function currentQA(){
   return sections()[sectionIndex]?.qa?.[qaIndex]
+}
+
+function questionPair(section,index){
+  return ['action','tactic','outcome'].includes(section?.type)&&section?.qa?.length===6?[index%3,index%3+3]:[index]
+}
+function visibleQuestionIndices(){return questionPair(sections()[sectionIndex],qaIndex)}
+function slotIndex(paired=false){return visibleQuestionIndices()[paired?1:0]}
+function slotQA(paired=false){return sections()[sectionIndex]?.qa?.[slotIndex(paired)]}
+function slotPath(paired=false){
+  return sections()[sectionIndex]?.type==='review'?['review',slotIndex(paired)]:['prediction',sectionIndex,'qa',slotIndex(paired)]
+}
+function navigationRefs(){
+  return sections().flatMap((s,i)=>(s.qa||[]).flatMap((_,q)=>questionPair(s,q)[0]===q?[{s:i,q}]:[]))
+}
+function activateQuestion(index,fieldId){
+  if(!Number.isInteger(index))return;
+  qaIndex=index;activeAnswerId=fieldId;
+  if(answerEditing)setAnswerEditing(true,false);
+  controls();renderSource();renderReferences()
 }
 
 function currentPath(){
@@ -845,20 +915,22 @@ function controls(){
   for(const id of ['save','sourceToggle'])$(id).disabled=!enabled;
   $('restoreSource').disabled=!enabled||!sourceModel||(!restoreSnapshot&&!changesBetween(sourceModel,model).length);
   $('restoreSource').textContent=restoreSnapshot?'撤销恢复':'恢复源 JSON';
-  const qaChanges=sourceModel&&currentQA()?changesBetween(atPath(sourceModel,currentPath()),currentQA()):[];
+  const qaChanges=sourceModel&&slotQA()?changesBetween(atPath(sourceModel,slotPath()),slotQA()):[];
   $('currentDiff').hidden=!qaChanges.length;
   $('currentDiff').disabled=!enabled;
   $('currentDiff').textContent=`本题改动 ${qaChanges.length}`;
   for(const id of ['format','reload','editor','applyRaw'])$(id).disabled=!enabled;
   $('jsonFiles').disabled=saving||loading||!$('jsonFiles').options.length;
-  for(const el of document.querySelectorAll('#reviewFields textarea,#metadata input,#metadata textarea,#metadata select,#sectionSelect,#choices button,#editQuestion'))el.disabled=!enabled;
+  for(const el of document.querySelectorAll('#reviewFields textarea,#metadata input,#metadata textarea,#metadata select,#sectionSelect,#choices button,#pairedChoices button,#editQuestion,#pairedEditQuestion'))el.disabled=!enabled;
   const index=filtered.findIndex(r=>r.path===current);
   $('prevVideo').disabled=saving||loading||changingRoot||indexLoading||index<=0;
   $('nextVideo').disabled=saving||loading||changingRoot||indexLoading||index<0||index>=filtered.length-1;
-  const all=questionRefs(),pos=all.findIndex(r=>r.s===sectionIndex&&r.q===qaIndex);
+  const all=navigationRefs(),pos=all.findIndex(r=>r.s===sectionIndex&&r.q===visibleQuestionIndices()[0]);
   $('prevQA').disabled=!enabled||pos<=0;
   $('nextQA').disabled=!enabled||pos<0;
-  $('nextQA').textContent=pos===all.length-1?'完成核对（Enter）':'下一题（Enter）';
+  const pairedPage=visibleQuestionIndices().length===2;
+  $('prevQA').textContent=pairedPage?'上一组（Q/⌫）':'上一题（Q/⌫）';
+  $('nextQA').textContent=pos===all.length-1?'完成核对（Enter）':pairedPage?'下一组（Enter）':'下一题（Enter）';
   $('confirmSave').disabled=!enabled;
   const hasChanges=!sourceModel||changesBetween(sourceModel,model).length>0;
   $('confirmSave').textContent=!hasChanges&&doc?.target_exists?'检查已有新版（+）':(hasChanges?'保存并':'无改动，')+(index>=0&&index<filtered.length-1?'下一回合（+）':'完成（+）');
@@ -867,6 +939,10 @@ function controls(){
   const cutoff=sections()[sectionIndex]?.cutoff_seconds;
   for(const id of ['seekBefore','seekCutoff','seekAfter'])$(id).disabled=!enabled||!Number.isFinite(cutoff)||$('video').readyState<1;
   $('openReferences').disabled=!referenceData;
+  const lower=slotQA(true),lowerChanges=sourceModel&&lower?changesBetween(atPath(sourceModel,slotPath(true)),lower):[];
+  $('pairedCurrentDiff').hidden=!lowerChanges.length;
+  $('pairedCurrentDiff').textContent=`本题改动 ${lowerChanges.length}`;
+  $('pairedCurrentDiff').disabled=!enabled;
   $('zoomImage').disabled=!enabled||!$('images').querySelector('a img');
   for(const id of ['volumeDown','volumeUp','nudgeBack','nudgeForward'])$(id).disabled=!$('video').getAttribute('src')||$('video').readyState<1
 }
@@ -880,6 +956,7 @@ function syncModel(){
   $('editor').value=sameJSON(model,baseline)?original:JSON.stringify(model,null,2)+'\n';
   editMessage(dirty()?'有未保存的修改，将保存为 '+doc.save_path:'内容未修改');
   controls();
+  updateImageTime();
   renderSource();
   scheduleReferences();
   scheduleCompactReview()
@@ -907,42 +984,33 @@ function answerLetter(text,options){
   return options.find(o=>o.text===value)?.letter||null
 }
 
-function renderChoices(){
-  const qa=currentQA(),parsed=parseChoices(qa?.question),selected=parsed?answerLetter(qa?.answer,parsed.options):null,baseline=atPath(sourceModel,currentPath()),originLetter=parsed?answerLetter(baseline?.answer,parsed.options):null;
-  $('choices').replaceChildren();
-  $('editQuestion').hidden=!parsed;
-  $('editQuestion').textContent=questionEditing?'返回选项':'编辑题目';
-  $('question').hidden=!!parsed&&!questionEditing;
-  $('questionStem').hidden=!parsed||questionEditing;
-  $('choices').hidden=!parsed||questionEditing;
-  $('questionStem').textContent=parsed?.stem||'';
-  $('choiceNote').textContent=parsed?'点选答案；沿用原选项或直接下一题可保留原值':'修改后点击顶部对照保存';
+function renderChoices(paired=false){
+  const el=id=>$(paired?'paired'+id[0].toUpperCase()+id.slice(1):id);
+  const qa=slotQA(paired),parsed=parseChoices(qa?.question),selected=parsed?answerLetter(qa?.answer,parsed.options):null,baseline=atPath(sourceModel,slotPath(paired)),originLetter=parsed?answerLetter(baseline?.answer,parsed.options):null;
+  const editing=paired?pairedQuestionEditing:questionEditing;
+  el('choices').replaceChildren();
+  el('editQuestion').hidden=!parsed;
+  el('editQuestion').textContent=editing?'返回选项':'编辑题目';
+  el('question').hidden=!!parsed&&!editing;
+  el('questionStem').hidden=!parsed||editing;
+  el('choices').hidden=!parsed||editing;
+  el('questionStem').textContent=parsed?.stem||'';
+  el('choiceNote').textContent=parsed?'点选答案；原选项或下一页保留原值':paired?'Shift 编辑答案':visibleQuestionIndices().length===2?'Tab 编辑答案':'Tab / Shift 编辑答案';
   if(!parsed)return;
   for(const option of parsed.options){
     const b=document.createElement('button');
-    b.className='choice';
-    b.type='button';
-    b.setAttribute('role','radio');
-    b.setAttribute('aria-checked',String(selected===option.letter));
-    const label=document.createElement('span');
-    label.textContent=option.letter+'. '+option.text;
-    b.append(label);
-    if(option.letter===originLetter){
-      const tag=document.createElement('small');
-      tag.textContent='原答案';
-      b.append(tag)
-    }
+    b.className='choice';b.type='button';
+    b.setAttribute('role','radio');b.setAttribute('aria-checked',String(selected===option.letter));
+    const label=document.createElement('span');label.textContent=option.letter+'. '+option.text;b.append(label);
+    if(option.letter===originLetter){const tag=document.createElement('small');tag.textContent='原答案';b.append(tag)}
     b.onclick=()=>{
-      const qa=currentQA();
-      const targetAnswer=option.letter===originLetter?baseline.answer:option.letter+'. '+option.text;
+      activateQuestion(slotIndex(paired),paired?'pairedAnswer':'answer');
+      const qa=slotQA(paired),targetAnswer=option.letter===originLetter?baseline.answer:option.letter+'. '+option.text;
       if(qa.answer===targetAnswer)return;
-      qa.answer=targetAnswer;
-      $('answer').value=qa.answer;
-      syncModel();
-      cleanEditedAnswers();
-      renderChoices()
+      qa.answer=targetAnswer;el('answer').value=qa.answer;
+      syncModel();cleanEditedAnswers();renderChoices(paired)
     };
-    $('choices').append(b)
+    el('choices').append(b)
   }
 }
 
@@ -958,13 +1026,30 @@ function renderReview(){
   $('reviewFields').hidden=!hasQA;
   $('reviewEmpty').hidden=hasQA;
   if(!hasQA)$('reviewEmpty').textContent=doc?'当前文件没有可逐题编辑的问答，可通过“更多”查看原始 JSON。':'从左侧选择回合，开始逐题核对。';
-  $('question').value=qa?.question??'';
-  $('answer').value=qa?.answer??'';
-  $('position').textContent=`${hasQA?qaIndex+1:0} / ${s?.qa?.length||0}`;
+  panelLayout.pair=null;
+  pairedQuestionEditing=false;
+  const indices=visibleQuestionIndices(),paired=indices.length===2;
+  activeAnswerId=paired&&qaIndex===indices[1]?'pairedAnswer':'answer';
+  $('reviewFields').classList.toggle('paired-view',paired);
+  $('pairedQA').hidden=!paired;$('answerSplitter').hidden=!paired;
+  const upper=slotQA(),lower=slotQA(true);
+  $('question').value=upper?.question??'';$('answer').value=upper?.answer??'';
+  $('pairedQuestion').value=lower?.question??'';$('pairedAnswer').value=lower?.answer??'';
+  $('questionLabel').textContent='问题 · 第 '+(indices[0]+1)+' 题';
+  $('answerLabel').textContent='答案 · 第 '+(indices[0]+1)+(paired?' 题（Tab）':' 题（Tab / Shift）');
+  $('pairedQuestionLabel').textContent=paired?'问题 · 第 '+(indices[1]+1)+' 题':'问题';
+  $('pairedAnswerLabel').textContent=paired?'答案 · 第 '+(indices[1]+1)+' 题（Shift）':'答案';
+  $('answer').setAttribute('aria-keyshortcuts',paired?'Tab':'Tab Shift');
+  $('pairedAnswer').setAttribute('aria-keyshortcuts','Shift');
+  $('answerLabel').parentElement.title='Tab 进入或退出第一个答案编辑；单题页也可用 Shift';
+  $('answerSplitter').setAttribute('aria-label',paired?'上下两组问答高度':'答案和参考区高度');
+  $('answerSplitter').title=paired?'拖动调整上下两组问答的高度，双击恢复自动高度':'拖动调整答案和参考区高度，双击恢复自动高度';
+  setAnswerEditing(false,false);
+  $('position').textContent=paired?`${indices[0]+1}＋${indices[1]+1} / 6`:`${hasQA?qaIndex+1:0} / ${s?.qa?.length||0}`;
   $('totalPosition').textContent=`总进度 ${Math.max(0,refs.findIndex(r=>r.s===sectionIndex&&r.q===qaIndex)+1)} / ${refs.length}`;
   showMetadata();
   showImage(s?.image||(s?.type==='review'?'outcome_boxes.jpg':undefined));
-  renderChoices();
+  renderChoices();renderChoices(true);
   renderSource();
   renderReferences();
   controls()
@@ -1083,7 +1168,7 @@ async function play(path){
 
 function stepQA(delta){
   cleanEditedAnswers();
-  const refs=questionRefs(),i=refs.findIndex(r=>r.s===sectionIndex&&r.q===qaIndex),r=refs[i+delta];
+  const refs=navigationRefs(),i=refs.findIndex(r=>r.s===sectionIndex&&r.q===visibleQuestionIndices()[0]),r=refs[i+delta];
   if(r){
     sectionIndex=r.s;
     qaIndex=r.q;
@@ -1152,7 +1237,7 @@ currentDiffButton.id='currentDiff';
 currentDiffButton.type='button';
 currentDiffButton.hidden=true;
 document.querySelector('.question-tools').prepend(currentDiffButton);
-currentDiffButton.onclick=()=>openDiff(currentPath());
+currentDiffButton.onclick=()=>{activateQuestion(slotIndex(),'answer');openDiff(slotPath())};
 
 function sourceStateKey(){
   return doc?[doc.root_id,doc.save_path,doc.save_version,doc.source_version].join('|'):''
@@ -1190,24 +1275,26 @@ $('sectionSelect').onchange=()=>{
   renderReview()
 };
 $('editQuestion').onclick=()=>{
+  activateQuestion(slotIndex(),'answer');
   questionEditing=!questionEditing;
   renderChoices();
   controls();
   scheduleCompactReview()
 };
 
-$('question').oninput=()=>{
-  currentQA().question=$('question').value;
-  syncModel()
+for(const paired of [false,true]){
+  const prefix=paired?'paired':'',field=id=>$(paired?prefix+id[0].toUpperCase()+id.slice(1):id);
+  field('questionArea').addEventListener('pointerdown',()=>activateQuestion(slotIndex(paired),paired?'pairedAnswer':'answer'));
+  field('question').addEventListener('focus',()=>activateQuestion(slotIndex(paired),paired?'pairedAnswer':'answer'));
+  field('question').oninput=()=>{slotQA(paired).question=field('question').value;syncModel()};
+  field('question').onblur=()=>{if(!(paired?pairedQuestionEditing:questionEditing))renderChoices(paired)};
+  field('answer').oninput=()=>{slotQA(paired).answer=field('answer').value;syncModel();renderChoices(paired)};
+}
+$('pairedEditQuestion').onclick=()=>{
+  activateQuestion(slotIndex(true),'pairedAnswer');pairedQuestionEditing=!pairedQuestionEditing;
+  renderChoices(true);controls();scheduleCompactReview()
 };
-$('question').onblur=()=>{
-  if(!questionEditing)renderChoices()
-};
-$('answer').oninput=()=>{
-  currentQA().answer=$('answer').value;
-  syncModel();
-  renderChoices()
-};
+$('pairedCurrentDiff').onclick=()=>{activateQuestion(slotIndex(true),'pairedAnswer');openDiff(currentPath())};
 
 function seekOffset(delta){
   const cutoff=sections()[sectionIndex]?.cutoff_seconds,video=$('video');
@@ -1281,7 +1368,7 @@ function renderReferences(){
 
   if(!$('referenceList'))return;
 
-  const qa=currentQA(),names=referenceData?matchedPlayers((qa?.question||'')+'\n'+(qa?.answer||''),referenceData.players||[]):[],records=(referenceData?.records||[]).filter(r=>names.includes(r.player));
+  const qa=currentQA(),text=visibleQuestionIndices().map(i=>sections()[sectionIndex]?.qa?.[i]).filter(Boolean).map(q=>q.question+'\n'+q.answer).join('\n'),names=referenceData?matchedPlayers(text,referenceData.players||[]):[],records=(referenceData?.records||[]).filter(r=>names.includes(r.player));
 
   $('referenceList').replaceChildren();
   $('allReferences').replaceChildren();
@@ -1356,7 +1443,7 @@ $('applyRaw').onclick=()=>{
   if(applyRaw())$('rawDialog').close()
 };
 
-$('nextQA').title='Enter 切换下一题；最后一题打开改动对照';
+$('nextQA').title='Enter 切换下一组问答；最后一页打开改动对照';
 
 $('nextQA').setAttribute('aria-keyshortcuts','Enter');
 
@@ -1606,33 +1693,36 @@ const directionKeys={ArrowUp:'volumeUp',ArrowDown:'volumeDown',ArrowLeft:'nudgeB
 
 
 function setAnswerEditing(enabled,moveFocus=true){
-
   if(!enabled)cleanEditedAnswers();
-
   answerEditing=!!enabled&&!!doc&&!saving&&!loading;
-
   document.body.classList.toggle('answer-editing',answerEditing);
-
-  $('answerModeNotice').hidden=!answerEditing;
-
-  $('choiceNote').hidden=answerEditing;
-
-  if(answerEditing&&moveFocus){
-    $('answer').focus({preventScroll:true});
-    const end=$('answer').value.length;
-    $('answer').setSelectionRange(end,end)
+  for(const paired of [false,true]){
+    const id=paired?'pairedAnswer':'answer',editing=answerEditing&&activeAnswerId===id;
+    $(id).classList.toggle('is-editing',editing);
+    $(paired?'pairedAnswerModeNotice':'answerModeNotice').hidden=!editing;
+    $(paired?'pairedChoiceNote':'choiceNote').hidden=editing;
   }
-  else if(!answerEditing&&document.activeElement===$('answer')){
-    $('answer').blur();
-    if(moveFocus){
-      $('title').tabIndex=-1;
-      $('title').focus({preventScroll:true})
-    }
+  const field=$(activeAnswerId);
+  if(answerEditing&&moveFocus){field.focus({preventScroll:true});const end=field.value.length;field.setSelectionRange(end,end)}
+  else if(!answerEditing&&['answer','pairedAnswer'].includes(document.activeElement?.id)){
+    document.activeElement.blur();
+    if(moveFocus){$('title').tabIndex=-1;$('title').focus({preventScroll:true})}
   }
-
 }
-
-$('answer').addEventListener('focus',()=>setAnswerEditing(true,false));
+function toggleAnswerSlot(paired){
+  const lower=paired&&visibleQuestionIndices().length===2,id=lower?'pairedAnswer':'answer';
+  if(!doc||saving||loading||!slotQA(lower))return;
+  if(answerEditing&&activeAnswerId===id){setAnswerEditing(false,true);return}
+  cleanEditedAnswers();
+  activateQuestion(slotIndex(lower),id);
+  setAnswerEditing(true,true)
+}
+for(const paired of [false,true]){
+  const id=paired?'pairedAnswer':'answer';
+  $(id).addEventListener('focus',()=>{
+    activateQuestion(slotIndex(paired),id);setAnswerEditing(true,false)
+  })
+}
 
 function keyboardAction(event){
 
@@ -1660,9 +1750,14 @@ for(const[id,key,label]of [['prevVideo','[','上一回合（【）'],['nextVideo
 
 document.addEventListener('keydown',event=>{
 
+  // A focused splitter owns its arrow keys, including while editing an answer.
+  if(event.target instanceof Element&&event.target.closest('[role="separator"]'))return;
+
   if(event.key==='Shift'){
     if(!event.repeat){
-      shiftTapArmed=heldShiftKeys.size===0;
+      const target=event.target instanceof Element?event.target:null;
+      const otherInput=target?.closest('input,select,textarea,[contenteditable="true"],[role="textbox"]')&&!['answer','pairedAnswer'].includes(target?.id);
+      shiftTapArmed=heldShiftKeys.size===0&&!otherInput;
       heldShiftKeys.add(event.code)
     }
     return
@@ -1672,6 +1767,16 @@ document.addEventListener('keydown',event=>{
 
   if(event.isComposing||event.ctrlKey||event.altKey||event.metaKey)return;
 
+  if(event.key==='Tab'&&!event.shiftKey&&!document.querySelector('dialog[open]')){
+    const target=event.target instanceof Element?event.target:null;
+    const otherInput=target?.closest('input,select,textarea,[contenteditable="true"],[role="textbox"]')&&!['answer','pairedAnswer'].includes(target?.id);
+    if(doc&&!saving&&!loading&&!otherInput){
+      event.preventDefault();event.stopPropagation();
+      if(!event.repeat)toggleAnswerSlot(false);
+      return
+    }
+  }
+
   const action=keyboardAction(event);
   if(!action)return;
 
@@ -1679,7 +1784,7 @@ document.addEventListener('keydown',event=>{
 
   const editable=target?.isContentEditable||target?.closest('textarea,input,select,[contenteditable="true"],[role="textbox"]');
 
-  const inAnswer=target===$('answer'),dialog=document.querySelector('dialog[open]');
+  const inAnswer=target===$('answer')||target===$('pairedAnswer'),dialog=document.querySelector('dialog[open]');
 
   if(editable&&!(inAnswer&&answerEditing&&event.shiftKey))return;
 
@@ -1733,7 +1838,7 @@ document.addEventListener('keyup',event=>{
 
     if(toggle&&!event.isComposing&&!event.ctrlKey&&!event.altKey&&!event.metaKey&&!document.querySelector('dialog[open]')){
       event.preventDefault();
-      if(doc&&!saving&&!loading)setAnswerEditing(!answerEditing)
+      toggleAnswerSlot(true)
     }
 
   }
@@ -1861,10 +1966,12 @@ function goToChange(path){
   if(location&&sections()[location.s]?.qa?.[location.q]){
     sectionIndex=location.s;
     qaIndex=location.q;
-    questionEditing=path.at(-1)==='question';
     renderReview();
-    if(questionEditing)$('question').focus();
-    else setAnswerEditing(true,true);
+    if(path.at(-1)==='question'){
+      if(activeAnswerId==='pairedAnswer')pairedQuestionEditing=true;else questionEditing=true;
+      renderChoices(activeAnswerId==='pairedAnswer');
+      $(activeAnswerId==='pairedAnswer'?'pairedQuestion':'question').focus()
+    }else setAnswerEditing(true,true);
     editMessage('已定位 '+pathLabel(path)+'；可点“本题改动”再次核对。');
   }else{
     if(location||path.length===0||['prediction','review'].includes(path[0])&&(path.length<3||path.includes('qa'))){
@@ -2051,7 +2158,8 @@ function normalizeEditedAnswers(model,baseline,source){
 
         if(value[key]===old?.[key]||value[key]===original?.[key])continue;
 
-        const cleaned=value[key].replace(/\s+/gu,'');
+        // Keep word separators (including player names); flatten pasted line breaks.
+        const cleaned=value[key].replace(/\s+/gu,' ').trim();
 
         if(cleaned!==value[key]){
           value[key]=cleaned;
@@ -2083,8 +2191,7 @@ function cleanEditedAnswers(){
   const changed=normalizeEditedAnswers(model,baseline,sourceModel);
 
   if(changed){
-    const qa=currentQA();
-    if(qa&&typeof qa.answer==='string')$('answer').value=qa.answer;
+    for(const paired of [false,true]){const qa=slotQA(paired);if(qa&&typeof qa.answer==='string')$(paired?'pairedAnswer':'answer').value=qa.answer}
     syncModel()
   }
 
@@ -2092,9 +2199,9 @@ function cleanEditedAnswers(){
 
 }
 
-$('answer').addEventListener('blur',()=>cleanEditedAnswers());
+for(const id of ['answer','pairedAnswer'])$(id).addEventListener('blur',()=>cleanEditedAnswers());
 
-$('answer').title='结束编辑、切题或查看对照前，自动清除修改答案中的空格、换行和制表符';
+for(const id of ['answer','pairedAnswer'])$(id).title='结束编辑、切题或查看对照前，去掉首尾空白，将换行、制表符和连续空格合并为一个空格；保留英文词语和人名之间的空格';
 
 function measureTextRows(field,text){
 
@@ -2134,63 +2241,186 @@ function scheduleCompactReview(){
   })
 }
 
+function qaContentSize(paired=false){
+  const el=id=>$(paired?'paired'+id[0].toUpperCase()+id.slice(1):id);
+  const measured=measureTextRows(el('answer'),el('answer').value);
+  if(!measured)return {question:48,answer:70,answerBase:43,rows:1};
+  let q;
+  if(!el('choices').hidden)q=el('questionStem').scrollHeight+el('choices').scrollHeight+6;
+  else{const m=measureTextRows(el('question'),el('question').value);q=m?m.rows*m.lineHeight+m.padding+m.border:48}
+  return {question:Math.max(32,Math.ceil(q)+2),answer:Math.ceil((measured.rows+2)*measured.lineHeight+measured.padding+measured.border),answerBase:Math.ceil(measured.rows*measured.lineHeight+measured.padding+measured.border),rows:measured.rows}
+}
+function fitQaContent(room,qDesired,aDesired,manual=null,answerBase=43){
+  const qMin=Math.min(32,room*.4),aMin=Math.min(43,room*.4);
+  const desired=manual!==null?room*manual:room>=qDesired+answerBase?qDesired:room*qDesired/Math.max(1,qDesired+answerBase);
+  const q=Math.max(qMin,Math.min(room-aMin,desired));
+  return [q,Math.max(0,room-q)]
+}
 function resizeCompactReview(){
-
-  const fields=$('reviewFields'),answer=$('answer');
+  const fields=$('reviewFields');
   if(fields.hidden||!fields.clientWidth||!fields.clientHeight)return;
-
-  const measured=measureTextRows(answer,answer.value);
-  if(!measured)return;
-
-  const question=$('question'),choicesVisible=!$('choices').hidden;
-
-  let questionDesired;
-
-  if(choicesVisible){
-    questionDesired=$('questionStem').scrollHeight+$('choices').scrollHeight+6
+  const paired=!$('pairedQA').hidden,upper=qaContentSize(),lower=paired?qaContentSize(true):null;
+  const navHeight=Math.max(30,$('qaNav').scrollHeight);
+  const labels=[...fields.children].filter(el=>el.matches('label.field'));
+  const labelHeight=labels.reduce((n,el)=>n+Math.max(21,el.scrollHeight),0);
+  const refDesired=fields.classList.contains('has-references')?Math.min(96,Math.max(60,fields.clientHeight*.13)):(paired?48:60);
+  const fixed=navHeight+labelHeight+(paired?28+8:25);
+  const room=Math.max(0,fields.clientHeight-fixed);
+  let refs=Math.min(room*.25,refDesired);
+  const lowerStyle=getComputedStyle($('pairedQA'));
+  const lowerOverhead=paired?[...$('pairedQA').querySelectorAll('label.field')].reduce((n,el)=>n+Math.max(21,el.scrollHeight),0)+3*parseFloat(lowerStyle.rowGap)+parseFloat(lowerStyle.paddingTop)+parseFloat(lowerStyle.paddingBottom)+2:0;
+  const baseNeeded=upper.question+upper.answerBase+(lower?lower.question+lower.answerBase:0);
+  // Give QA content priority; only the bottom reference area yields first.
+  refs=Math.min(refs,Math.max(0,room-lowerOverhead-baseNeeded));
+  const available=Math.max(0,room-refs-lowerOverhead);
+  const needed=upper.question+upper.answer+(lower?lower.question+lower.answer:0);
+  const used=panelLayout.pair!==null?available:Math.min(available,needed);
+  let upperRoom=used,lowerRoom=0;
+  if(paired){
+    const upperBase=upper.question+upper.answerBase,lowerBase=lower.question+lower.answerBase,base=upperBase+lowerBase;
+    if(panelLayout.pair!==null)upperRoom=used*boundedPanelFraction(panelLayout.pair,used,76);
+    else upperRoom=used>=base?upperBase+(used-base)/2:Math.min(upperBase,Math.max(0,used-32));
+    lowerRoom=used-upperRoom
   }
-  else{
-    const q=measureTextRows(question,question.value);
-    questionDesired=q?q.rows*q.lineHeight+q.padding+q.border:60
+  const [q,a]=fitQaContent(upperRoom,upper.question,upper.answer,null,upper.answerBase);
+  let template=`auto auto ${q}px auto ${a}px `;
+  if(paired){
+    const [lq,la]=fitQaContent(lowerRoom,lower.question,lower.answer,null,lower.answerBase);
+    $('pairedQA').style.gridTemplateRows=`auto ${lq}px auto ${la}px`;
+    template+=`8px ${lowerRoom+lowerOverhead}px `;
+    $('pairedAnswer').dataset.contentRows=String(lower.rows);
   }
-
-  questionDesired=Math.max(48,Math.ceil(questionDesired));
-
-  const navHeight=Math.max(30,$('qaNav').scrollHeight),labels=[...fields.querySelectorAll('label.field')],labelHeight=labels.reduce((total,label)=>total+Math.max(21,label.scrollHeight),0),gaps=25;
-
-  const hasReferences=fields.classList.contains('has-references'),refMinimum=hasReferences?Math.min(126,Math.max(78,fields.clientHeight*.19)):64;
-
-  const contentRoom=Math.max(90,fields.clientHeight-navHeight-labelHeight-gaps-refMinimum);
-
-  const answerDesired=Math.ceil((measured.rows+2)*measured.lineHeight+measured.padding+measured.border);
-
-  const answerMinimum=Math.ceil(2*measured.lineHeight+measured.padding+measured.border);
-
-  let qHeight=Math.min(questionDesired,Math.max(48,contentRoom-answerMinimum));
-
-  let aHeight=Math.min(answerDesired,Math.max(answerMinimum,contentRoom-qHeight));
-
-  if(qHeight+aHeight>contentRoom){
-    qHeight=Math.max(40,contentRoom-aHeight)
-  }
-
-  const template=`auto auto ${Math.round(qHeight)}px auto ${Math.round(aHeight)}px minmax(0,1fr)`;
-
+  template+='minmax(0,1fr)';
   if(fields.style.gridTemplateRows!==template)fields.style.gridTemplateRows=template;
-
-  answer.style.height='100%';
-  answer.dataset.contentRows=String(measured.rows);
-  answer.dataset.extraRows='2';
-  answer.dataset.allocatedHeight=String(Math.round(aHeight));
-
+  $('answer').dataset.contentRows=String(upper.rows);
+  $('answer').dataset.extraRows='2';$('pairedAnswer').dataset.extraRows='2';
+  updateSplitterValue($('answerSplitter'),room?(paired?upperRoom/Math.max(1,used):used/room):0);
 }
 
-window.addEventListener('resize',scheduleCompactReview);
+window.addEventListener('resize',()=>{applyPanelLayout();scheduleCompactReview()});
 
 const compactReviewObserver=new ResizeObserver(scheduleCompactReview);
 compactReviewObserver.observe($('reviewLayout'));
 
 $('answer').addEventListener('input',scheduleCompactReview);
 $('question').addEventListener('input',scheduleCompactReview);
+$('pairedQuestion').addEventListener('input',scheduleCompactReview);
+$('pairedAnswer').addEventListener('input',scheduleCompactReview);
+
+const PANEL_LAYOUT_KEY='basketball-panel-layout-v1';
+const DEFAULT_PANEL_LAYOUT={columns:1.12/2.12,media:.575,question:null,answer:null,pairedQuestion:null,pair:null,references:null};
+function readPanelLayout(raw){
+  const state={...DEFAULT_PANEL_LAYOUT};
+  if(!raw||typeof raw!=='object')return state;
+  for(const key of ['columns','media']){
+    if(Number.isFinite(raw[key]))state[key]=Math.max(.15,Math.min(.85,raw[key]));
+  }
+  return state
+}
+let panelLayout={...DEFAULT_PANEL_LAYOUT};
+try{panelLayout=readPanelLayout(JSON.parse(localStorage.getItem(PANEL_LAYOUT_KEY)))}catch{}
+function persistPanelLayout(){
+  try{localStorage.setItem(PANEL_LAYOUT_KEY,JSON.stringify({columns:panelLayout.columns,media:panelLayout.media}))}catch{}
+}
+function boundedPanelFraction(value,room,minimum){
+  const edge=room>0?Math.min(.45,minimum/room):.45;
+  return Math.max(edge,Math.min(1-edge,value))
+}
+function updateSplitterValue(handle,fraction){
+  handle.setAttribute('aria-valuemin','0');
+  handle.setAttribute('aria-valuemax','100');
+  handle.setAttribute('aria-valuenow',String(Math.round(fraction*100)));
+  handle.setAttribute('aria-valuetext',Math.round(fraction*100)+'%')
+}
+function applyPanelLayout(){
+  const layout=$('reviewLayout'),media=$('mediaPanels');
+  const column=boundedPanelFraction(panelLayout.columns,layout.clientWidth-10,280);
+  const row=boundedPanelFraction(panelLayout.media,media.clientHeight-10,105);
+  layout.style.gridTemplateColumns=`minmax(0,${column}fr) 10px minmax(0,${1-column}fr)`;
+  media.style.gridTemplateRows=`minmax(0,${row}fr) 10px minmax(0,${1-row}fr)`;
+  updateSplitterValue($('columnsSplitter'),column);
+  updateSplitterValue($('mediaSplitter'),row);
+  scheduleCompactReview()
+}
+function resetPanelAxis(axis){
+  if(axis==='columns'||axis==='media')panelLayout[axis]=DEFAULT_PANEL_LAYOUT[axis];
+  else panelLayout.pair=null
+  persistPanelLayout();applyPanelLayout()
+}
+function splitterSnapshot(axis){
+  if(axis==='columns'){
+    const room=$('reviewLayout').clientWidth-10;
+    return {room,value:$('mediaPanels').getBoundingClientRect().width,minimum:280}
+  }
+  if(axis==='media'){
+    const room=$('mediaPanels').clientHeight-10;
+    return {room,value:$('video').closest('.visual-panel').getBoundingClientRect().height,minimum:105}
+  }
+  const q=$('questionArea').getBoundingClientRect().height,a=$('answer').getBoundingClientRect().height,r=$('refs').getBoundingClientRect().height;
+  const lq=$('pairedQuestionArea').getBoundingClientRect().height,la=$('pairedAnswer').getBoundingClientRect().height;
+  return {room:q+a+r+lq+la,q,a,r,lq,la,paired:!$('pairedQA').hidden}
+}
+function movePanelSplitter(axis,start,delta){
+  if(start.room<=0)return;
+  if(axis==='columns'||axis==='media'){
+    panelLayout[axis]=boundedPanelFraction((start.value+delta)/start.room,start.room,start.minimum);
+    applyPanelLayout();return
+  }
+  const qaRoom=start.q+start.a+start.lq+start.la;
+  if(!start.paired||qaRoom<=0)return;
+  panelLayout.pair=boundedPanelFraction((start.q+start.a+delta)/qaRoom,qaRoom,76);
+  resizeCompactReview()
+}
+
+function initializePanelSplitter(id,axis){
+  const handle=$(id),vertical=axis==='columns';
+  handle.setAttribute('aria-keyshortcuts',vertical?'ArrowLeft ArrowRight Home':'ArrowUp ArrowDown Home');
+  let drag=null;
+  const position=e=>vertical?e.clientX:e.clientY;
+  handle.addEventListener('pointerdown',e=>{
+    if(!e.isPrimary||e.button!==0)return;
+    e.preventDefault();shiftTapArmed=false;
+    handle.focus({preventScroll:true});
+    drag={pointer:e.pointerId,position:position(e),start:splitterSnapshot(axis)};
+    handle.setPointerCapture(e.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing-panels');
+    document.body.style.cursor=vertical?'col-resize':'row-resize'
+  });
+  handle.addEventListener('pointermove',e=>{
+    if(drag&&e.pointerId===drag.pointer)movePanelSplitter(axis,drag.start,position(e)-drag.position)
+  });
+  function finish(e){
+    if(!drag||(e&&e.pointerId!==undefined&&e.pointerId!==drag.pointer))return;
+    const pointer=drag.pointer;drag=null;
+    handle.classList.remove('dragging');
+    document.body.classList.remove('resizing-panels');
+    document.body.style.cursor='';
+    if(handle.hasPointerCapture(pointer))handle.releasePointerCapture(pointer);
+    persistPanelLayout()
+  }
+  for(const event of ['pointerup','pointercancel','lostpointercapture'])handle.addEventListener(event,finish);
+  window.addEventListener('blur',()=>finish());
+  handle.addEventListener('dblclick',()=>resetPanelAxis(axis));
+  handle.addEventListener('keydown',e=>{
+    shiftTapArmed=false;
+    if(e.ctrlKey||e.altKey||e.metaKey)return;
+    if(e.key==='Home'){
+      e.preventDefault();resetPanelAxis(axis);return
+    }
+    const minus=vertical?'ArrowLeft':'ArrowUp',plus=vertical?'ArrowRight':'ArrowDown';
+    if(e.key!==minus&&e.key!==plus)return;
+    e.preventDefault();e.stopPropagation();
+    movePanelSplitter(axis,splitterSnapshot(axis),(e.key===minus?-1:1)*(e.shiftKey?30:8));
+    persistPanelLayout()
+  })
+}
+for(const [id,axis] of [['columnsSplitter','columns'],['mediaSplitter','media'],['answerSplitter','answer']])initializePanelSplitter(id,axis);
+$('resetPanelLayout').onclick=()=>{
+  panelLayout={...DEFAULT_PANEL_LAYOUT};persistPanelLayout();applyPanelLayout()
+};
+const panelLayoutObserver=new ResizeObserver(applyPanelLayout);
+panelLayoutObserver.observe($('reviewLayout'));
+applyPanelLayout();
 
 scheduleCompactReview();

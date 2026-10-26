@@ -14,6 +14,7 @@ ROOT_FILES = ['.gitignore', '.gitattributes', 'AGENTS.md', 'README.md', 'README.
               'requirements.txt', 'config.example.json', 'remote.example.json',
               'token_viewer.py', 'excel_reference.py', 'viewer.html',
               'start.bat', 'stop.bat', 'start.ps1', 'stop.ps1',
+              'status.bat', 'status.ps1', 'install-shortcuts.bat', 'install-shortcuts.ps1', 'VERSION',
               'start-demo.bat', 'stop-demo.bat', 'open-48g.bat', 'open-48g.ps1']
 
 
@@ -31,6 +32,9 @@ def digest(path):
 
 def build(python_zip, ffmpeg, ffmpeg_source, output, overwrite=False):
     output = Path(output).resolve()
+    version = (PROJECT / 'VERSION').read_text().strip()
+    if f'v{version}' not in output.name:
+        raise ValueError(f'文件名应包含版本号 v{version}，例如 CourtCraftQA-v{version}-Windows-x64.zip。')
     if output.exists() and not overwrite:
         raise FileExistsError('输出已存在，使用新文件名或 --overwrite。')
     python_zip, ffmpeg, ffmpeg_source = [Path(p).resolve() for p in (python_zip, ffmpeg, ffmpeg_source)]
@@ -83,17 +87,20 @@ def build(python_zip, ffmpeg, ffmpeg_source, output, overwrite=False):
             'https://www.gyan.dev/ffmpeg/builds/\n'
             'https://ffmpeg.org/releases/\n'
             'Third-party library source repositories are listed by the upstream build provider.\n', encoding='utf-8')
-        readme = ('CourtCraftQA Windows 64位便携版\n\n'
+        readme = (f'CourtCraftQA v{version} Windows 64位便携版\n\n'
                   '1. 将整个压缩包全部解压到一个可写文件夹。不要在压缩包里直接运行。\n'
-                  '2. 双击 start.bat，浏览器会打开 http://127.0.0.1:5012。\n'
-                  '3. 左侧菜单顶部输入自己的数据目录，点击“读取”，选择回合开始核对。\n\n'
+                  '2. 可双击 install-shortcuts.bat 创建桌面启动、运行状态、停止快捷方式；无需管理员权限。\n'
+                  '3. 双击 start.bat 或桌面“CourtCraftQA 启动”，浏览器打开 http://127.0.0.1:5012。\n'
+                  '4. 左侧菜单顶部输入自己的数据目录，点击“读取”，选择回合开始核对。\n\n'
                   '内置 Python 和 FFmpeg，无须安装 Python、Conda、Excel 或额外包。\n'
-                  '使用结束双击 stop.bat。换数据目录可直接在网页输入，无须重启。\n'
+                  'status.bat 查看是否运行，stop.bat 停止服务。换数据目录可直接在网页输入，无须重启。\n'
+                  '动作、战术、结果各6题时配对显示1+4、2+5、3+6。Tab编辑第一个答案，Shift编辑第二个。\n'
+                  '拖动左右、视频/图片或两组问答之间的分隔线；点击“全屏（F11）”增加可用空间。\n'
                   'MOV 等视频首次转换需等待；后续使用缓存。\n'
                   '若5012端口被占用，编辑自动生成的config.json，将port改为5018后再启动。\n'
                   '压缩包不含比赛数据。完整教程见 docs/quick-start.md 和 docs/user-guide.md。\n')
         (root / '先看这里.txt').write_text(readme, encoding='utf-8-sig')
-        metadata = {'package': 'CourtCraftQA Windows x64', 'python_archive': python_zip.name,
+        metadata = {'package': 'CourtCraftQA Windows x64', 'version': version, 'python_archive': python_zip.name,
                     'python_archive_sha256': digest(python_zip), 'ffmpeg_sha256': digest(ffmpeg),
                     'ffmpeg_source_archive': ffmpeg_source.name, 'ffmpeg_source_sha256': digest(ffmpeg_source),
                     'files': {p.relative_to(root).as_posix(): digest(p) for p in root.rglob('*') if p.is_file()}}

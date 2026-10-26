@@ -210,15 +210,15 @@ body.sidebar-open #menu,body.pinned #menu {
 }
 #reviewLayout {
   display:grid;
-  grid-template-columns:minmax(0,1.12fr) minmax(0,1fr);
-  gap:8px;
+  grid-template-columns:minmax(0,1.12fr) 10px minmax(0,1fr);
+  gap:0;
   min-height:0;
   min-width:0
 }
 .media {
   display:grid;
-  grid-template-rows:minmax(0,1fr) minmax(0,1fr);
-  gap:8px;
+  grid-template-rows:minmax(0,1.15fr) 10px minmax(0,.85fr);
+  gap:0;
   min-height:0;
   min-width:0
 }
@@ -253,6 +253,16 @@ body.sidebar-open #menu,body.pinned #menu {
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap
+}
+.image-time {
+  color:#fcd98a;
+  background:#423622;
+  border-radius:4px;
+  padding:1px 5px;
+  font-size:11px;
+  font-variant-numeric:tabular-nums;
+  white-space:nowrap;
+  flex-shrink:0
 }
 .visual-panel video {
   display:block;
@@ -520,7 +530,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 }
 @media(max-width:760px) {
   #reviewLayout {
-    grid-template-columns:minmax(0,1fr) minmax(0,1fr)
+    grid-template-columns:minmax(0,1fr) 10px minmax(0,1fr)
   }
   #position {
     display:none
@@ -886,7 +896,7 @@ body.source-open #sourceDrawer {
     grid-template-columns:repeat(2,minmax(0,1fr))
   }
 }
-body.answer-editing #answer {
+#answer.is-editing,#pairedAnswer.is-editing {
   border:2px solid #fbbf24;
   box-shadow:0 0 0 2px #fbbf242b;
   background:#221e18
@@ -1135,3 +1145,68 @@ button.diff-jump:hover {background:#2b475d}
 #cleanupDelete {background:#9c3b2d;border-color:#9c3b2d;color:white;font-weight:700}
 #cleanupError:empty {display:none}
 #restoreSource {font-size:12px}
+#toggleFullscreen {font-size:12px;white-space:nowrap}
+#toggleFullscreen[aria-pressed=true] {background:#164e63;border-color:#38bdf8}
+html:fullscreen {background:var(--bg)}
+
+/* Splitters share the existing gutters, keeping all panels inside one screen. */
+.panel-splitter {
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  touch-action:none;
+  user-select:none;
+  outline:none;
+  min-width:0;
+  min-height:0;
+  border-radius:4px;
+  position:relative;
+  z-index:2
+}
+.splitter-columns {cursor:col-resize}
+.splitter-rows {cursor:row-resize}
+.panel-splitter span {background:#52647e;border-radius:3px;pointer-events:none}
+.splitter-columns span {width:3px;height:40px;max-height:70%}
+.splitter-rows span {height:3px;width:44px;max-width:70%}
+.panel-splitter:hover,.panel-splitter:focus-visible,.panel-splitter.dragging {
+  background:#38bdf82b;
+  box-shadow:inset 0 0 0 1px #38bdf85c
+}
+.panel-splitter:hover span,.panel-splitter:focus-visible span,.panel-splitter.dragging span {background:#7dd3fc}
+.panel-splitter[hidden],#pairedQA[hidden] {display:none}
+body.resizing-panels,body.resizing-panels * {user-select:none!important;cursor:inherit!important}
+body.resizing-panels .visual-panel video,body.resizing-panels .visual-panel img {pointer-events:none}
+.panel-head {overflow-x:auto;scrollbar-width:thin}
+.panel-head strong,.panel-head button,.panel-head .caption {flex-shrink:0;white-space:nowrap}
+#qaNav {overflow-x:auto;scrollbar-width:thin}
+#qaNav button {flex-shrink:0;white-space:nowrap}
+#pairedQA {
+  display:grid;
+  grid-template-rows:auto minmax(0,1fr) auto minmax(0,1fr);
+  gap:3px;
+  padding:4px;
+  min-height:0;
+  min-width:0;
+  overflow:hidden;
+  border:1px solid #38516a;
+  border-radius:6px;
+  background:#0d1928
+}
+#pairedQuestionArea {display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
+#pairedQuestionArea>textarea {flex:none;height:100%}
+#pairedQuestion,#pairedAnswer {min-height:0;height:100%;resize:none;font-size:14px;overflow:auto}
+#pairedQuestionStem {font-size:14px;white-space:pre-wrap;flex:none}
+#pairedChoices {display:grid;gap:4px}
+#pairedQuestion[hidden],#pairedQuestionStem[hidden],#pairedChoices[hidden],#pairedEditQuestion[hidden] {display:none}
+#pairedAnswerModeNotice {font-size:11px;color:#fcd76c;font-weight:600}
+#pairedAnswerModeNotice[hidden],#pairedChoiceNote[hidden] {display:none}
+.paired-view .choice {padding:3px 7px;line-height:1.4;font-size:13px}
+.paired-view #question,.paired-view #answer {font-size:14px;padding:6px 8px;line-height:1.55}
+.paired-view #questionStem {font-size:14px}
+#pairedQA textarea {padding:6px 8px;line-height:1.55}
+.paired-view #choiceNote,.paired-view #pairedChoiceNote {max-width:68%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.paired-view #totalPosition {display:none}
+#reviewFields.paired-view {gap:4px}
+.paired-view #authorSignature img {width:30px;height:30px}
+.paired-view #authorSignature {gap:2px}
+.paired-view #authorSignature span {font-size:11px}
