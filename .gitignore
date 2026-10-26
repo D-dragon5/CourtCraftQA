@@ -18,6 +18,8 @@ demo-data-*/
 *.local.json
 code-manifest.json
 tools/
+runtime/
+dist/
 .venv/
 .env
 .env.*

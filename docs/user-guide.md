@@ -6,30 +6,24 @@ CourtCraftQA 将篮球回合视频、标注图片、问答和人物事件参考�
 
 ## 1 安装和启动
 
-需要 Python 3.10 或以上版本，以及较新的桌面浏览器。后端和 Excel 读取均使用 Python 标准库，无须安装额外 Python 包，也无须安装 Microsoft Excel。
+### Windows 便携包
 
-MP4、WebM、M4V 直接交给浏览器播放。MOV、MKV、AVI 会通过 FFmpeg 转为缓存视频，需要安装 FFmpeg，或在配置里填写可执行文件路径。浏览器仍需支持视频实际编码；文件扩展名本身不能保证可播放。
+`CourtCraftQA-Windows-x64.zip` 适用于 Windows 10 或 Windows 11 的 64 位电脑。完整便携包内置 Python 运行环境和视频转换程序，无须安装 Python、pip、Conda 或 Microsoft Excel，也无须手动设置转换程序路径。
 
-以 Windows 为例，将代码放在 `C:\CourtCraftQA`，数据放在独立的 `D:\basketball-data`：
+1. 将压缩包**全部解压**，保留整个目录；不要在压缩包预览窗口中直接运行。
+2. 双击 `start.bat`。首次启动自动生成配置和空数据目录，浏览器打开 <http://127.0.0.1:5012>。
+3. 展开左侧栏，在“数据目录”中填写自己保存回合的文件夹完整路径，点击“读取”或按 Enter，随后选择回合。
+4. 结束使用后双击 `stop.bat`。仅关闭页面，后台服务可以继续运行。
 
-```text
-D:\basketball-data\
-  C001\
-    original.mp4
-    action_boxes.jpg
-    tactic_boxes.jpg
-    outcome_boxes.jpg
-    qa.json
-    source_PL_label.xlsx
-  C002\
-    original.mov
-    qa.json
-    ...
-```
+便携包不含比赛数据。更换数据目录时直接在侧栏修改并读取，无须重启。MOV 等视频首次播放需要转换，请等待完成，后续会使用缓存。依赖许可说明见包内 `licenses/`。最短操作清单见 [Windows 快速使用](quick-start.md)。
 
-程序会递归查找数据目录里的视频，并读取视频同目录的图片、JSON 和 Excel。每个回合使用独立文件夹最便于管理。Excel 文件名应为 `source_PL_label.xlsx`；缺少图片或人物表时，可继续核对已有问答。
+### GitHub 源码版
 
-在代码目录复制 `config.example.json` 为 `config.json`，按实际位置修改，例如：
+源码版需要自行安装 Python 3.10 或以上版本，以及较新的桌面浏览器。后端和 Excel 读取使用 Python 标准库，无须安装额外 Python 包，也无须安装 Conda 或 Microsoft Excel。Windows 双击 `start.bat` 后，首次也会自动生成配置和空数据目录，再到侧栏填写实际数据路径；双击 `stop.bat` 关闭本项目服务。
+
+源码仓库不附带 Python 运行环境和 FFmpeg。MP4、WebM、M4V 直接交给浏览器播放；MOV、MKV、AVI 通过 FFmpeg 转为缓存视频，需要另行提供 FFmpeg，或在配置里填写可执行文件路径。浏览器仍需支持视频实际编码，文件扩展名本身不能保证可播放。
+
+命令行用户可复制 `config.example.json` 为 `config.json`，按实际位置修改，例如：
 
 ```json
 {
@@ -42,24 +36,42 @@ D:\basketball-data\
 }
 ```
 
-JSON 中的 Windows 路径可使用 `/`，或将每个反斜杠写成 `\\`。`data_root` 必须指向已经存在的数据根目录。`ffmpeg` 留空时自动查找项目的 `tools/ffmpeg.exe` 或系统 PATH，也可填系统命令名或完整路径，如 `C:/CourtCraftQA/tools/ffmpeg.exe`。相对目录按项目所在位置解析。
+JSON 中的 Windows 路径可使用 `/`，或将每个反斜杠写成 `\\`。`data_root` 必须指向已存在的数据根目录。`ffmpeg` 留空时自动查找项目的 `tools/ffmpeg.exe` 或系统 PATH，也可填系统命令名或完整路径，如 `C:/CourtCraftQA/tools/ffmpeg.exe`。相对目录按项目所在位置解析。
 
-双击 `start.bat` 启动，浏览器会打开配置的端口；按上例访问 `http://127.0.0.1:5012`。关闭页面后，服务可以继续运行；双击 `stop.bat` 关闭本项目的 Python 服务。
-
-也可在终端启动，便于查看错误：
+设置好配置后在代码目录启动，便于查看错误：
 
 ```powershell
-cd C:\CourtCraftQA
 python token_viewer.py --config config.json
 ```
 
-Linux 对应使用：
+Linux 使用：
 
 ```sh
 python3 token_viewer.py --config config.json
 ```
 
-配置文件中的端口决定实际访问地址。若通过命令行或环境变量覆盖配置，以最终生效值为准；终端启动信息会显示数据目录和地址。
+若 5012 端口已被其他程序使用，先关闭本项目，将 `config.json` 的 `port` 改为例如 `5018`，再重新启动。配置端口决定访问地址；终端启动信息也会显示地址。通过命令行或环境变量覆盖配置时，以最终生效值为准。
+
+### 准备回合数据
+
+每个回合使用独立文件夹，将视频、源 JSON、标注图和人物表放在同一目录。例如：
+
+```text
+basketball-data/
+  C001/
+    original.mp4
+    action_boxes.jpg
+    tactic_boxes.jpg
+    outcome_boxes.jpg
+    qa.json
+    source_PL_label.xlsx
+  C002/
+    original.mov
+    qa.json
+    ...
+```
+
+程序递归查找数据目录中的视频，并读取视频同目录的图片、JSON 和 Excel。人物表文件名应为 `source_PL_label.xlsx`；缺少图片或人物表时，可继续核对已有问答。
 
 ## 2 选择回合并熟悉页面
 

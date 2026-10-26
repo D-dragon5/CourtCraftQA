@@ -1,43 +1,46 @@
 # CourtCraftQA
 
+Windows 用户可从 [发布下载页](https://github.com/D-dragon5/CourtCraftQA/releases/latest) 获取完整便携包，全部解压后双击 `start.bat`，无须另装 Python 或视频转换工具。
+
 篮球视频问答的人工核对工具。视频、标注图片、当前问答和人物事件参考在同一页展示，支持逐题编辑、源 JSON 只读定位、逐字差异核对，以及确认后另存新版。
 
+- [Windows 快速使用](docs/quick-start.md)：解压便携包、启动和读取自己的数据。
 - [完整使用教程](docs/user-guide.md)：安装、日常核对、快捷键、保存规则和故障处理。
 - [现场演示流程](docs/demo-guide.md)：8–10 分钟操作顺序、3 分钟简版和现场恢复方案。
 - [JSON 示例](examples/qa.example.json) 与 [数据格式说明](examples/README.md)：使用虚构内容说明问答结构。
 
 ## 快速开始
 
-需要 Python 3.10 或以上版本和桌面浏览器。Python 后端与 Excel 读取仅使用标准库，无额外 Python 包；MOV、MKV、AVI 转码需要 FFmpeg。MP4、WebM、M4V 直接交给浏览器播放，仍需编码兼容。
+### Windows 便携包
+
+Windows 10 或 Windows 11 的 64 位电脑可使用 `CourtCraftQA-Windows-x64.zip`。完整便携包内置 Python 运行环境和视频转换程序，无须安装 Python、pip、Conda 或 Excel，也无须手动设置转换程序路径。
+
+1. 将压缩包**全部解压**，保留完整目录，不要在压缩包窗口里直接运行。
+2. 双击 `start.bat`，首次自动生成配置和空数据目录，浏览器打开 <http://127.0.0.1:5012>。
+3. 展开左侧栏，在“数据目录”填写自己的回合数据路径，点击“读取”或按 Enter 即可开始。以后更换目录也无须重启。
+4. 结束后双击 `stop.bat`。比赛数据不包含在压缩包中，依赖许可说明见包内 `licenses/`。
+
+完整步骤与常见情况见 [Windows 快速使用](docs/quick-start.md)。
+
+### GitHub 源码版
+
+源码版需要自行安装 Python 3.10 或以上版本和桌面浏览器。Python 后端与 Excel 读取仅使用标准库，无额外 Python 包。源码仓库不附带运行环境和 FFmpeg；MOV、MKV、AVI 转码需要另行提供 FFmpeg，MP4、WebM、M4V 直接交给浏览器播放，仍需编码兼容。
 
 ```powershell
 git clone https://github.com/D-dragon5/CourtCraftQA.git
 cd CourtCraftQA
-Copy-Item config.example.json config.json
+.\start.bat
 ```
 
-这是私有仓库，下载需使用有访问权限的 GitHub 账号。编辑 `config.json`，例如：
+这是私有仓库，下载需使用有访问权限的 GitHub 账号。Windows 首次双击 `start.bat` 也会自动生成配置和空数据目录，随后在侧栏填写实际数据路径；关闭使用 `stop.bat`。
 
-```json
-{
-  "data_root": "D:/basketball-data",
-  "host": "127.0.0.1",
-  "port": 5012,
-  "ffmpeg": "",
-  "cache_dir": "cache",
-  "backups_dir": "backups"
-}
-```
-
-`data_root` 必须存在。Windows 路径可用 `/` 或双反斜杠。`ffmpeg` 留空时自动查找项目的 `tools/ffmpeg.exe` 或系统 PATH，也可填完整路径。缓存、备份的相对路径按项目目录解析。
-
-Windows 双击 `start.bat` 启动，访问 <http://127.0.0.1:5012>；双击 `stop.bat` 关闭本项目服务。也可在终端运行：
+命令行启动时可手动复制 `config.example.json` 为 `config.json`，将 `data_root` 设为已存在的数据目录，再运行：
 
 ```sh
 python token_viewer.py --config config.json
 ```
 
-Linux 使用 `python3`。地址中的端口随实际配置变化，终端会显示运行地址和数据目录。
+Linux 使用 `python3`。`ffmpeg` 留空时自动查找项目的 `tools/ffmpeg.exe` 或系统 PATH，也可填完整路径；相对路径按项目目录解析。手动配置示例、端口调整和故障处理见 [使用教程](docs/user-guide.md)。
 
 ## 数据目录
 

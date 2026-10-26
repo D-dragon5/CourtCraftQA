@@ -7,10 +7,10 @@ CourtCraftQA 篮球问答人工核对工具
 虚构 JSON 示例：examples/qa.example.json 与 examples/README.md
 
 日常使用：
-1. 安装 Python 3.10 或以上版本；Python 无额外包依赖。
-2. 复制 config.example.json 为 config.json，设置数据根目录。
-3. Windows 双击 start.bat 启动，stop.bat 停止；默认端口 5012。
-4. 或运行 python token_viewer.py --config config.json。
+1. 完整Windows便携包已内置Python和视频转换程序，无须另装环境；源码版需自行准备Python 3.10或以上版本。
+2. 将文件全部解压，双击 start.bat，首次自动生成空目录配置。
+3. 在网页侧栏顶部输入实际数据目录并点击读取；默认端口5012。
+4. 使用结束双击 stop.bat。最简教程见 docs/quick-start.md。
 
 演示使用：
 python scripts/prepare_demo.py "D:\basketball-data\C251"
