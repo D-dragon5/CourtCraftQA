@@ -3,6 +3,7 @@ const csrf=document.querySelector('meta[name="viewer-token"]').content;
 const $=id=>document.getElementById(id);
 
 let rows=[],filtered=[],page=0,size=40,current='',selection=0,jsonSelection=0,doc=null,original='',saving=false,loading=false,model=null,sectionIndex=0,qaIndex=0,attachments={images:[],json:[]};
+let catalogRootId=null,indexLoading=false,changingRoot=false;
 
 const dirty=()=>!!doc&&$('editor').value!==original;
 
@@ -17,17 +18,27 @@ function showPath(){
 }
 
 async function request(url,options={}){
+  if(catalogRootId&&(!options.method||options.method==='GET')&&/^\/api\/(assets|references|json|prepare)\?/.test(url))url+='&root_id='+encodeURIComponent(catalogRootId);
   const r=await fetch(url,{cache:'no-store',...options}),data=await r.json();
   if(!r.ok)throw Error(data.error||'请求失败');
   return data
 }
 
 let pinned=false;
+let wheelFirstAt=null,wheelLastAt=0,wheelPagingLocked=false;
+const wheelHint='列表到底后，连续下滚两次翻页';
+function resetWheelPaging(){
+  wheelFirstAt=null;
+  wheelLastAt=0;
+  wheelPagingLocked=false;
+  $('listWheelHint').textContent=wheelHint;
+}
 try{
   pinned=localStorage.getItem('basketball-sidebar-pinned')==='true'
 }catch{}
 
 function sidebar(open){
+  if(!open)resetWheelPaging();
   document.body.classList.toggle('sidebar-open',open);
   $('sidebar').inert=!(open||pinned);
   $('menu').setAttribute('aria-expanded',String(open||pinned))
@@ -55,6 +66,7 @@ $('menu').onmouseenter=openMenu;
 $('menu').onclick=openMenu;
 $('sidebar').onmouseenter=openMenu;
 $('sidebar').onmouseleave=()=>{
+  resetWheelPaging();
   if(!pinned)menuTimer=setTimeout(()=>{
     sidebar(false);
     if($('sidebar').contains(document.activeElement))document.activeElement.blur()
@@ -75,6 +87,7 @@ document.addEventListener('keydown',e=>{
 pin(pinned);
 
 function filter(){
+  resetWheelPaging();
   const q=$('search').value.trim().toLowerCase(),g=$('group').value;
   filtered=rows.filter(x=>(!g||x.path.split('/')[0]===g)&&x.path.toLowerCase().includes(q));
   page=0;
@@ -82,6 +95,7 @@ function filter(){
 }
 
 function draw(){
+  page=Math.max(0,Math.min(page,Math.max(0,Math.ceil(filtered.length/size)-1)));
   $('items').replaceChildren();
   for(const r of filtered.slice(page*size,(page+1)*size)){
     const b=document.createElement('button');
@@ -99,15 +113,30 @@ function draw(){
     $('items').append(b)
   }
   $('page').textContent=`${page+1}/${Math.max(1,Math.ceil(filtered.length/size))}`;
+  const folderCount=new Set(rows.map(r=>r.path.includes('/')?r.path.slice(0,r.path.lastIndexOf('/')):'.')).size;
+  $('catalogCount').textContent=`${folderCount} 个回合目录 · ${rows.length} 个视频 · 每页 ${size} 个`;
   $('prev').disabled=page===0;
   $('next').disabled=(page+1)*size>=filtered.length;
   $('status').textContent=`找到 ${filtered.length} 个视频（共 ${rows.length} 个）`;
   controls()
 }
 
-async function load(){
+async function load(force=false){
+  if(saving||loading||indexLoading||changingRoot)return;
+  indexLoading=true;
+  controls();
+  resetWheelPaging();
   try{
-    rows=await request('/api/videos');
+    const health=await request('/api/root'+(force?'?refresh=1':'')),videoRows=health.videos;
+    if(catalogRootId&&health.root_id!==catalogRootId){
+      if(dirty()&&!confirm('数据目录已在其他页面切换。重新读取会放弃当前未保存修改，是否继续？'))return;
+      clearLoadedRound();
+    }
+    rows=videoRows;
+    catalogRootId=health.root_id;
+    $('dataRoot').value=health.data_root;
+    $('catalogRoot').textContent='读取目录：'+health.data_root;
+    $('catalogRoot').title=health.data_root;
     const old=$('group').value;
     $('group').replaceChildren(new Option('全部回合',''));
     for(const g of [...new Set(rows.map(x=>x.path.split('/')[0]))].sort())$('group').add(new Option(g,g));
@@ -115,8 +144,115 @@ async function load(){
     filter()
   }catch(e){
     $('status').textContent='索引失败：'+e.message
+  }finally{
+    indexLoading=false;
+    controls();
   }
 }
+
+function clearLoadedRound(){
+  ++selection;
+  ++jsonSelection;
+  loading=false;
+  current='';
+  doc=null;
+  model=null;
+  sourceModel=null;
+  referenceData=null;
+  referenceError='';
+  original='';
+  attachments={images:[],json:[]};
+  restoreSnapshot=null;
+  cleanupContext=null;
+  pendingCleanup=false;
+  questionEditing=false;
+  setAnswerEditing(false,false);
+  $('editor').value='';
+  $('jsonFiles').replaceChildren();
+  $('video').pause();
+  $('video').removeAttribute('src');
+  $('video').load();
+  $('title').textContent='从左侧选择回合';
+  showPath();
+  renderReview();
+}
+
+async function applyDataRoot(){
+  if(saving||loading||changingRoot||indexLoading)return;
+  const path=$('dataRoot').value.trim().replace(/^"(.*)"$/,'$1');
+  if(!path){$('dataRoot').focus();return}
+  cleanEditedAnswers();
+  if(dirty()&&!confirm('切换目录会放弃当前回合未保存的修改，是否继续？'))return;
+  changingRoot=true;
+  controls();
+  editMessage('正在读取新目录…');
+  try{
+    const data=await request('/api/root',{method:'POST',headers:{'Content-Type':'application/json','X-Viewer-Token':csrf},body:JSON.stringify({data_root:path,root_id:catalogRootId})});
+    clearLoadedRound();
+    rows=data.videos;
+    catalogRootId=data.root_id;
+    $('dataRoot').value=data.data_root;
+    $('catalogRoot').textContent='读取目录：'+data.data_root;
+    $('catalogRoot').title=data.data_root;
+    $('group').replaceChildren(new Option('全部回合',''));
+    for(const group of [...new Set(rows.map(x=>x.path.split('/')[0]))].sort())$('group').add(new Option(group,group));
+    $('search').value='';
+    filter();
+    editMessage('目录已记住，已读取全部 '+rows.length+' 个视频。请选择回合。','success');
+  }catch(e){
+    editMessage('目录读取失败：'+e.message+'。当前编辑已保留，可刷新列表核对当前目录。','error');
+  }finally{
+    changingRoot=false;
+    controls();
+  }
+}
+$('applyRoot').onclick=applyDataRoot;
+$('dataRoot').addEventListener('keydown',event=>{
+  if(event.key==='Enter'&&!event.isComposing){
+    event.preventDefault();
+    event.stopPropagation();
+    applyDataRoot();
+  }
+});
+
+function turnListPage(delta){
+  const target=page+delta;
+  if(target<0||target>=Math.ceil(filtered.length/size))return false;
+  const list=$('items'),focusInList=list.contains(document.activeElement);
+  resetWheelPaging();
+  page=target;
+  draw();
+  list.scrollTop=0;
+  if(focusInList)list.focus({preventScroll:true});
+  return true;
+}
+
+$('items').addEventListener('wheel',event=>{
+  const list=$('items'),now=performance.now(),idle=now-wheelLastAt;
+  wheelLastAt=now;
+  const bottom=list.scrollTop+list.clientHeight>=list.scrollHeight-2;
+  const downward=event.deltaY>0&&Math.abs(event.deltaY)>=Math.abs(event.deltaX);
+  if(!downward||!bottom||$('next').disabled){
+    wheelFirstAt=null;
+    $('listWheelHint').textContent=wheelHint;
+    return;
+  }
+  event.preventDefault();
+  if(wheelPagingLocked){
+    if(idle<250)return;
+    wheelPagingLocked=false;
+  }
+  if(wheelFirstAt===null||now-wheelFirstAt>800){
+    wheelFirstAt=now;
+    $('listWheelHint').textContent='再向下滚一次，进入下一页';
+    return;
+  }
+  if(now-wheelFirstAt<65)return;
+  if(turnListPage(1)){
+    wheelPagingLocked=true;
+    wheelLastAt=now;
+  }
+},{passive:false});
 
 function questionRefs(){
   return sections().flatMap((s,i)=>Array.isArray(s.qa)?s.qa.map((_,j)=>({s:i,q:j})):[])
@@ -177,7 +313,7 @@ function showImage(name){
     return
   }
   const f=document.createElement('figure'),a=document.createElement('a'),img=document.createElement('img'),c=document.createElement('figcaption');
-  a.href='/image?path='+encodeURIComponent(item.path);
+  a.href='/image?path='+encodeURIComponent(item.path)+(catalogRootId?'&root_id='+encodeURIComponent(catalogRootId):'');
   a.title='点击放大标注图';
   a.onclick=e=>{
     e.preventDefault();
@@ -228,15 +364,9 @@ $('speed').onchange=()=>{
 $('video').onloadedmetadata=$('speed').onchange;
 $('search').oninput=filter;
 $('group').onchange=filter;
-$('refresh').onclick=load;
-$('prev').onclick=()=>{
-  page--;
-  draw()
-};
-$('next').onclick=()=>{
-  page++;
-  draw()
-};
+$('refresh').onclick=()=>load(true);
+$('prev').onclick=()=>turnListPage(-1);
+$('next').onclick=()=>turnListPage(1);
 $('prevVideo').onclick=()=>{
   const i=filtered.findIndex(r=>r.path===current);
   if(i>0)play(filtered[i-1].path)
@@ -708,7 +838,10 @@ function atPath(object,path){
 }
 
 function controls(){
-  const enabled=!!doc&&!saving&&!loading;
+  const enabled=!!doc&&!saving&&!loading&&!changingRoot&&!indexLoading;
+  $('dataRoot').disabled=saving||loading||changingRoot||indexLoading;
+  $('applyRoot').disabled=saving||loading||changingRoot||indexLoading;
+  $('refresh').disabled=saving||loading||changingRoot||indexLoading;
   for(const id of ['save','sourceToggle'])$(id).disabled=!enabled;
   $('restoreSource').disabled=!enabled||!sourceModel||(!restoreSnapshot&&!changesBetween(sourceModel,model).length);
   $('restoreSource').textContent=restoreSnapshot?'撤销恢复':'恢复源 JSON';
@@ -720,8 +853,8 @@ function controls(){
   $('jsonFiles').disabled=saving||loading||!$('jsonFiles').options.length;
   for(const el of document.querySelectorAll('#reviewFields textarea,#metadata input,#metadata textarea,#metadata select,#sectionSelect,#choices button,#editQuestion'))el.disabled=!enabled;
   const index=filtered.findIndex(r=>r.path===current);
-  $('prevVideo').disabled=saving||loading||index<=0;
-  $('nextVideo').disabled=saving||loading||index<0||index>=filtered.length-1;
+  $('prevVideo').disabled=saving||loading||changingRoot||indexLoading||index<=0;
+  $('nextVideo').disabled=saving||loading||changingRoot||indexLoading||index<0||index>=filtered.length-1;
   const all=questionRefs(),pos=all.findIndex(r=>r.s===sectionIndex&&r.q===qaIndex);
   $('prevQA').disabled=!enabled||pos<=0;
   $('nextQA').disabled=!enabled||pos<0;
@@ -824,7 +957,7 @@ function renderReview(){
   const qa=s?.qa?.[qaIndex],hasQA=!!qa;
   $('reviewFields').hidden=!hasQA;
   $('reviewEmpty').hidden=hasQA;
-  if(!hasQA)$('reviewEmpty').textContent='当前文件没有可逐题编辑的问答，可通过“更多”查看原始 JSON。';
+  if(!hasQA)$('reviewEmpty').textContent=doc?'当前文件没有可逐题编辑的问答，可通过“更多”查看原始 JSON。':'从左侧选择回合，开始逐题核对。';
   $('question').value=qa?.question??'';
   $('answer').value=qa?.answer??'';
   $('position').textContent=`${hasQA?qaIndex+1:0} / ${s?.qa?.length||0}`;
@@ -903,7 +1036,7 @@ async function assets(path,ticket){
 }
 
 async function play(path){
-  if(saving||loading)return false;
+  if(saving||loading||changingRoot||indexLoading)return false;
   cleanEditedAnswers();
   if(dirty()&&!confirm('当前回合有未保存的修改，是否放弃并切换？'))return false;
   const ticket=++selection;
@@ -1022,7 +1155,7 @@ document.querySelector('.question-tools').prepend(currentDiffButton);
 currentDiffButton.onclick=()=>openDiff(currentPath());
 
 function sourceStateKey(){
-  return doc?[doc.save_path,doc.save_version,doc.source_version].join('|'):''
+  return doc?[doc.root_id,doc.save_path,doc.save_version,doc.source_version].join('|'):''
 }
 
 function restoreSource(){
@@ -1319,7 +1452,7 @@ $('confirmSave').onclick=async()=>{
 
   try{
 
-    const data=await request('/api/json',{method:'POST',headers:{'Content-Type':'application/json','X-Viewer-Token':csrf},body:JSON.stringify({path:doc.path,version:doc.version,save_version:doc.save_version,immutable_source_path:doc.immutable_source_path,source_version:doc.source_version,text:$('editor').value})});
+    const data=await request('/api/json',{method:'POST',headers:{'Content-Type':'application/json','X-Viewer-Token':csrf},body:JSON.stringify({root_id:doc.root_id,path:doc.path,version:doc.version,save_version:doc.save_version,immutable_source_path:doc.immutable_source_path,source_version:doc.source_version,text:$('editor').value})});
 
     applyDocumentSnapshot(data);
     result=data;
@@ -1409,7 +1542,7 @@ $('cleanupDelete').onclick=async()=>{
   saving=true;
   controls();
   try{
-    const data=await request('/api/json/cleanup',{method:'POST',headers:{'Content-Type':'application/json','X-Viewer-Token':csrf},body:JSON.stringify({path:doc.path,version:doc.version,save_version:doc.save_version,immutable_source_path:doc.immutable_source_path,source_version:doc.source_version,confirm_delete:true,discard_saved_changes:differs})});
+    const data=await request('/api/json/cleanup',{method:'POST',headers:{'Content-Type':'application/json','X-Viewer-Token':csrf},body:JSON.stringify({root_id:doc.root_id,path:doc.path,version:doc.version,save_version:doc.save_version,immutable_source_path:doc.immutable_source_path,source_version:doc.source_version,confirm_delete:true,discard_saved_changes:differs})});
     dismissedCleanups.add(key);
     applyDocumentSnapshot(data);
     cleanupContext=null;

@@ -31,12 +31,15 @@ FFMPEG = os.environ.get('COURTCRAFT_FFMPEG') or (
 CACHE = APP_DIR / 'cache'
 HOST = '127.0.0.1'
 PORT = 5012
+CONFIG_FILE = APP_DIR / 'config.json'
+ROOT_SWITCHED = False
 
 EXTS = {'.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v'}
 LOCK = threading.Lock()
 CONVERT = threading.Semaphore(1)
 catalog = []
 catalog_at = 0
+catalog_root = None
 CSRF = os.environ.get('COURTCRAFT_VIEWER_TOKEN') or secrets.token_urlsafe(32)
 SAVE_LOCK = threading.Lock()
 BACKUPS = APP_DIR / 'backups'
@@ -45,27 +48,39 @@ IMAGES = {'.jpg', '.jpeg', '.png', '.webp', '.gif'}
 
 
 
-def source(rel):
-    p = (ROOT / rel).resolve()
-    if not p.is_relative_to(ROOT) or not p.is_file() or p.suffix.lower() not in EXTS:
+def source(rel, root=None):
+    root = ROOT if root is None else root
+    p = (root / rel).resolve()
+    if not p.is_relative_to(root) or not p.is_file() or p.suffix.lower() not in EXTS:
         raise ValueError('无效的视频路径')
     return p
 
-def videos():
-    global catalog, catalog_at
+
+def scan_videos(root):
+    """Scan one explicit directory without reading or modifying global state."""
+    if not root.is_dir():
+        raise ValueError('CourtCraft 目录不存在')
+    # iterdir explicitly checks directory readability, including empty roots.
+    next(root.iterdir(), None)
+    return sorted([{'path': p.relative_to(root).as_posix(), 'bytes': p.stat().st_size}
+                   for p in root.rglob('*') if p.suffix.lower() in EXTS
+                   and p.is_file() and p.resolve().is_relative_to(root)],
+                  key=lambda r: [int(part) if part.isdigit() else part for part in re.split(r'(\d+)', r['path'])])
+
+
+def videos(refresh=False):
+    """Index every supported video below the configured root, with no row limit."""
+    global catalog, catalog_at, catalog_root
     with LOCK:
-        if time.monotonic() - catalog_at > 15 or not catalog_at:
-            if not ROOT.is_dir():
-                raise ValueError('CourtCraft 目录不存在')
-            catalog = sorted([{'path': p.relative_to(ROOT).as_posix(), 'bytes': p.stat().st_size}
-                              for p in ROOT.rglob('*') if p.suffix.lower() in EXTS
-                              and p.is_file() and p.resolve().is_relative_to(ROOT)], key=lambda r: r['path'])
+        if refresh or ROOT != catalog_root or time.monotonic() - catalog_at > 15 or not catalog_at:
+            catalog = scan_videos(ROOT)
             catalog_at = time.monotonic()
+            catalog_root = ROOT
         return catalog
 
-def prepare(rel):
+def prepare(rel, root=None):
     from urllib.parse import quote
-    p = source(rel)
+    p = source(rel, root=root)
     if p.suffix.lower() in {'.mp4', '.webm', '.m4v'}:
         return '/video?path=' + quote(rel, safe='')
     key = hashlib.sha256(f'{p}:{p.stat().st_size}:{p.stat().st_mtime_ns}'.encode()).hexdigest()
@@ -233,6 +248,7 @@ def document_snapshot(p, raw=None):
     matches = (source_info['source_available'] and saved_text is not None and
                json_semantically_equal(source_info['source_text'], saved_text))
     return dict(source_info,
+                root_id=root_identifier(),
                 path=p.relative_to(ROOT).as_posix(), text=raw.decode('utf-8-sig'),
                 version=hashlib.sha256(raw).hexdigest(),
                 save_path=target.relative_to(ROOT).as_posix(), save_version=saved_version,
@@ -243,13 +259,82 @@ def document_snapshot(p, raw=None):
                 cleanup_requires_discard=source_info['source_available'] and saved_raw is not None and not matches)
 
 
-def read_json(rel):
+def read_json(rel, expected_root_id=None):
     with SAVE_LOCK:
+        validate_read_root(expected_root_id)
         return document_snapshot(asset_source(rel, {'.json'}))
 
 
 class Conflict(ValueError):
     pass
+
+
+def root_identifier(root=None):
+    value = os.path.normcase(str((ROOT if root is None else root).resolve()))
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+def validate_read_root(expected):
+    if expected is not None and expected != root_identifier():
+        raise Conflict('数据目录已在其他页面切换，请保留当前编辑并重新读取列表。')
+
+
+def validate_write_root(data):
+    expected = data.get('root_id')
+    if expected is None and not ROOT_SWITCHED:
+        return
+    if expected != root_identifier():
+        raise Conflict('数据目录已切换，当前页面的编辑不能写入新目录；请保留内容后重新读取。')
+
+
+def persist_data_root(root):
+    """Replace only data_root atomically; failures leave the old config intact."""
+    path = CONFIG_FILE
+    settings = strict_json(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
+    if not isinstance(settings, dict):
+        raise ValueError('配置文件必须是 JSON 对象，当前目录未切换。')
+    settings['data_root'] = str(root)
+    raw = (json.dumps(settings, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+    fd, name = tempfile.mkstemp(prefix='.viewer-config-', suffix='.tmp', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def switch_root(data):
+    """Validate, scan and remember an existing directory before publishing it."""
+    global ROOT, ROOT_SWITCHED, catalog, catalog_at, catalog_root
+    if not isinstance(data, dict) or not isinstance(data.get('data_root'), str) or not data['data_root'].strip():
+        raise ValueError('请输入已存在的数据根目录。')
+    requested = Path(data['data_root'].strip()).expanduser()
+    if not requested.is_absolute():
+        raise ValueError('数据根目录必须使用绝对路径。')
+    requested = requested.resolve()
+    with SAVE_LOCK:
+        if data.get('root_id') != root_identifier():
+            raise Conflict('数据目录已在其他页面切换，请先刷新列表后再选择目录。')
+    candidates = scan_videos(requested)
+    with SAVE_LOCK:
+        with LOCK:
+            if data.get('root_id') != root_identifier():
+                raise Conflict('扫描期间数据目录已被其他页面切换，请重新读取列表。')
+            if not requested.is_dir():
+                raise ValueError('扫描后的数据目录已不存在，当前目录未切换。')
+            next(requested.iterdir(), None)
+            # Persist first. No live state changes if configuration cannot save.
+            persist_data_root(requested)
+            ROOT_SWITCHED = ROOT_SWITCHED or requested != ROOT
+            ROOT = requested
+            catalog = candidates
+            catalog_root = requested
+            catalog_at = time.monotonic()
+            return {'data_root': str(ROOT), 'root_id': root_identifier(),
+                    'videos': list(catalog), 'persisted': True}
 
 
 def backup_json(p, raw):
@@ -292,6 +377,7 @@ def save_json(data):
         raise ValueError('JSON 文件超过 8 MiB 限制')
     strict_json(data['text'])
     with SAVE_LOCK:
+        validate_write_root(data)
         source_file = asset_source(data.get('path'), {'.json'})
         if file_version(source_file) != data.get('version'):
             raise Conflict('读取的文件已改变，请先保留当前修改，再重新读取。')
@@ -354,10 +440,11 @@ def cleanup_json(data):
     relative = data.get('path')
     if not isinstance(relative, str):
         raise ValueError('文件路径必须是字符串')
-    requested = (ROOT / relative).resolve()
-    if not requested.is_relative_to(ROOT) or requested.suffix.lower() != '.json':
-        raise ValueError('只能清理数据目录内对应的新版 JSON')
     with SAVE_LOCK:
+        validate_write_root(data)
+        requested = (ROOT / relative).resolve()
+        if not requested.is_relative_to(ROOT) or requested.suffix.lower() != '.json':
+            raise ValueError('只能清理数据目录内对应的新版 JSON')
         origin = immutable_source_path(requested)
         target = output_path(requested)
         if origin == target or not target.stem.endswith('-new'):
@@ -460,25 +547,47 @@ class Handler(BaseHTTPRequestHandler):
             if u.path.startswith(('/static/', '/assets/')):
                 return self.static_asset(u.path)
             if u.path == '/api/health':
-                return self.reply({'status': 'ok', 'data_root': str(ROOT), 'videos': len(videos()),
-                                   'python': sys.version.split()[0], 'ffmpeg': FFMPEG})
-            if u.path == '/api/assets': return self.reply(assets(args.get('path',[''])[0]))
-            if u.path == '/api/references': return self.reply(excel_references(args.get('path',[''])[0]))
-            if u.path == '/api/json': return self.reply(read_json(args.get('path',[''])[0]))
+                with SAVE_LOCK:
+                    return self.reply({'status': 'ok', 'data_root': str(ROOT), 'root_id': root_identifier(),
+                                       'videos': len(videos()), 'python': sys.version.split()[0], 'ffmpeg': FFMPEG})
+            if u.path == '/api/root':
+                with SAVE_LOCK:
+                    rows = videos(refresh=args.get('refresh', [''])[0].lower() in {'1', 'true'})
+                    return self.reply({'data_root': str(ROOT), 'root_id': root_identifier(), 'videos': rows})
+            expected_root_id = args.get('root_id', [None])[0]
+            if u.path in {'/api/assets', '/api/references'}:
+                with SAVE_LOCK:
+                    validate_read_root(expected_root_id)
+                    value = assets(args.get('path', [''])[0]) if u.path == '/api/assets' else excel_references(args.get('path', [''])[0])
+                    return self.reply(value)
+            if u.path == '/api/json': return self.reply(read_json(args.get('path',[''])[0], expected_root_id))
             if u.path == '/image':
-                p = asset_source(args.get('path',[''])[0], IMAGES)
-                return self.reply(p.read_bytes(), mimetypes.guess_type(p.name)[0] or 'application/octet-stream')
-            if u.path == '/api/videos': return self.reply(videos())
-            if u.path == '/api/prepare': return self.reply({'url': prepare(args.get('path',[''])[0])})
-            if u.path == '/video': p = source(args.get('path',[''])[0])
-            elif u.path == '/cached':
-                name = args.get('file',[''])[0]
-                if not re.fullmatch(r'[a-f0-9]{64}\.mp4', name): raise ValueError('无效路径')
-                p = CACHE / name
-                if not p.is_file(): raise ValueError('缓存不存在')
-            else: return self.reply({'error':'未找到'}, status=404)
+                with SAVE_LOCK:
+                    validate_read_root(expected_root_id)
+                    p = asset_source(args.get('path',[''])[0], IMAGES)
+                    return self.reply(p.read_bytes(), mimetypes.guess_type(p.name)[0] or 'application/octet-stream')
+            if u.path == '/api/videos': return self.reply(videos(refresh=args.get('refresh', [''])[0].lower() in {'1', 'true'}))
+            if u.path == '/api/prepare':
+                with SAVE_LOCK:
+                    validate_read_root(expected_root_id)
+                    prepared_root, prepared_root_id = ROOT, root_identifier()
+                url = prepare(args.get('path', [''])[0], root=prepared_root)
+                with SAVE_LOCK:
+                    validate_read_root(prepared_root_id)
+                    return self.reply({'url': url + ('&' if '?' in url else '?') + 'root_id=' + prepared_root_id})
+            with SAVE_LOCK:
+                validate_read_root(expected_root_id)
+                if u.path == '/video': p = source(args.get('path',[''])[0])
+                elif u.path == '/cached':
+                    name = args.get('file',[''])[0]
+                    if not re.fullmatch(r'[a-f0-9]{64}\.mp4', name): raise ValueError('无效路径')
+                    p = CACHE / name
+                    if not p.is_file(): raise ValueError('缓存不存在')
+                else: return self.reply({'error':'未找到'}, status=404)
             self.stream(p)
         except (BrokenPipeError, ConnectionResetError): pass
+        except Conflict as e:
+            self.reply({'error': str(e)}, status=409)
         except (ValueError, OSError, subprocess.SubprocessError) as e:
             self.reply({'error':str(e)}, status=400)
 
@@ -496,7 +605,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         endpoint = urlsplit(self.path).path
-        if endpoint not in {'/api/json', '/api/json/cleanup'}:
+        if endpoint not in {'/api/json', '/api/json/cleanup', '/api/root'}:
             return self.reply({'error': '未找到'}, status=404)
         if not secrets.compare_digest(self.headers.get('X-Viewer-Token', ''), CSRF):
             return self.reply({'error': '页面验证已过期，请保留编辑内容后刷新页面'}, status=403)
@@ -508,7 +617,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({'error': '请求大小无效'}, status=413)
             self.connection.settimeout(30)
             data = strict_json(self.rfile.read(length).decode('utf-8'))
-            self.reply(cleanup_json(data) if endpoint == '/api/json/cleanup' else save_json(data))
+            self.reply(switch_root(data) if endpoint == '/api/root' else cleanup_json(data) if endpoint == '/api/json/cleanup' else save_json(data))
         except Conflict as e:
             self.reply({'error': str(e)}, status=409)
         except (ValueError, OSError, TypeError) as e:
@@ -544,8 +653,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def configure(config_path=None, **overrides):
     """Apply saved settings, environment variables, then explicit CLI overrides."""
-    global ROOT, FFMPEG, CACHE, BACKUPS, HOST, PORT
-    path = Path(config_path) if config_path else APP_DIR / 'config.json'
+    global ROOT, FFMPEG, CACHE, BACKUPS, HOST, PORT, CONFIG_FILE
+    path = (Path(config_path).expanduser() if config_path else APP_DIR / 'config.json').resolve()
     settings = json.loads(path.read_text(encoding='utf-8-sig')) if path.is_file() else {}
     if not isinstance(settings, dict):
         raise ValueError('配置文件必须是 JSON 对象')
@@ -565,6 +674,7 @@ def configure(config_path=None, **overrides):
         raise ValueError(f'数据目录不存在：{ROOT}')
     if not 1 <= PORT <= 65535:
         raise ValueError('端口必须为 1–65535')
+    CONFIG_FILE = path
 
 
 def main():
